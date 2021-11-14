@@ -1,0 +1,189 @@
+---
+title: "Untitled"
+author: "Zi Lynn Ow"
+date: "10/20/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(RSQLite)
+library(DBI)
+library(tidyverse)
+library(dbplyr)
+library(fuzzyjoin)
+```
+
+```{r}
+if (file.exists("airline2.db"))
+  file.remove("airline2.db")
+```
+
+```{r}
+conn <- dbConnect(RSQLite::SQLite(), "airline2.db")
+```
+
+```{r}
+ontime <- list.files(path = "/Users/zilynnow/Desktop/ST2195_ProgrammingforDataScience/Assignment/Practice_Assignment_03/ontime", pattern = "*.csv", full.names = TRUE) %>% 
+lapply(read_csv) %>% bind_rows                                                      
+ontime                                                     
+```
+
+```{r}
+airports <- read.csv("/Users/zilynnow/Desktop/ST2195_ProgrammingforDataScience/Assignment/Practice_Assignment_03/dataverse_files/airports.csv", header = TRUE)
+
+carriers <- read.csv("/Users/zilynnow/Desktop/ST2195_ProgrammingforDataScience/Assignment/Practice_Assignment_03/dataverse_files/carriers.csv", header = TRUE)
+
+planes <- read.csv("/Users/zilynnow/Desktop/ST2195_ProgrammingforDataScience/Assignment/Practice_Assignment_03/dataverse_files/plane-data.csv", header = TRUE)
+```
+
+```{r}
+dbWriteTable(conn,"ontime", ontime)
+```
+
+```{r}
+dbWriteTable(conn,"planes", planes)
+dbWriteTable(conn,"airports", airports)
+dbWriteTable(conn,"carriers", carriers)
+```
+
+```{r}
+dbListFields(conn,"airports", airports)
+```
+
+```{r}
+dbListFields(conn,"carriers", carriers)
+```
+
+```{r}
+dbListFields(conn,"planes", planes)
+```
+
+```{r}
+dbListFields(conn,"ontime", ontime)
+```
+
+```{r}
+ontime_db <- tbl(conn, "ontime")
+airports_db <- tbl(conn, "airports")
+carriers_db <- tbl(conn, "carriers")
+planes_db <- tbl(conn,"planes")
+```
+
+Q1: Which plane model has the lowest associated average departure delay (excluding cancelled and diverted flights)?
+
+```{r}
+q1 <- dbGetQuery(conn, 
+"SELECT model AS model, AVG(ontime.DepDelay) AS avg_DepDelay
+FROM ontime INNER JOIN planes USING (tailnum)
+WHERE ontime.DepDelay>0 & ontime.Diverted == 0 & ontime.Cancelled == 0
+GROUP BY model
+ORDER BY avg_DepDelay")
+print(paste(q1[1, "model"], "has the lowest associated average departure delay."))
+```
+
+```{r}
+q1b <- ontime_db %>% rename_all(tolower) %>% inner_join(planes_db, by = "tailnum", suffix =c(".ontime",".planes")) %>% filter(DepDelay>0) %>% filter(Diverted == 0) %>% filter(Cancelled == 0 )%>% group_by(model) %>% summarize(avg_DepDelay = mean(DepDelay, na.rm = TRUE)) %>% arrange(avg_DepDelay) 
+print(head(q1b, 1))
+```
+
+```{r}
+dbWriteTable(conn,"q1", q1)
+```
+
+Q2: Which city has the highest number of inbound flights (excluding cancelled flights?)
+
+```{r}
+q2 <- dbGetQuery(conn, 
+"SELECT airports.city AS airport, COUNT(*) as total
+FROM airports INNER JOIN ontime
+ON ontime.Dest = airports.iata
+WHERE ontime.Cancelled = 0 
+GROUP BY airports.city
+ORDER BY total DESC")
+print(paste(q2[1, "airport"], "as the highest number of inbound flights (excluding cancelled flights)."))
+```
+
+```{r}
+q2b <- inner_join(ontime_db, airports_db, by = c("Dest"="iata")) %>% filter(Cancelled == 0) %>% group_by(city) %>% 
+  count(city) %>% arrange(desc(n)) 
+print(head(q2b, 1))
+```
+
+```{r}
+dbWriteTable(conn,"q2", q2)
+```
+
+Q3: Which carrier has the highest number of cancelled flights?
+
+```{r}
+q3 <- dbGetQuery(conn, 
+"SELECT carriers.Description AS carrier, COUNT(*) as total
+FROM carriers INNER JOIN ontime 
+ON ontime.UniqueCarrier = carriers.Code
+WHERE ontime.Cancelled = 1
+GROUP BY carriers.Description
+ORDER BY total DESC")
+print(paste(q3[1, "carrier"], "has the highest number of cancelled flights."))
+```
+
+```{r}
+q3b <- inner_join(ontime_db, carriers_db,by=c("UniqueCarrier"="Code")) %>% filter(Cancelled ==1) %>%  
+group_by(Description) %>% summarize(total= sum(Cancelled, na.rm = TRUE)) %>% arrange(desc(total))
+print(head(q3b, 1))
+```
+
+```{r}
+dbWriteTable(conn,"q3", q3)
+```
+
+Q4: Which carrier has the highest number of cancelled flights, relative to their number of total flights?
+
+```{r}
+UniqueCarrierCount <- dbGetQuery(conn, 
+"SELECT carriers.Description AS carrier, COUNT(*) as denominator
+FROM carriers INNER JOIN ontime 
+ON ontime.UniqueCarrier = carriers.Code
+GROUP BY carriers.Description
+ORDER BY denominator DESC")
+UniqueCarrierCount
+```
+
+```{r}
+dbWriteTable(conn,"UniqueCarrierCount", UniqueCarrierCount)
+```
+
+```{r}
+q4 <- dbGetQuery(conn, 
+"SELECT *, total* 1./denominator as ratio
+FROM q3 INNER JOIN UniqueCarrierCount USING(carrier)
+ORDER BY ratio DESC")
+print(paste(q4[1, "carrier"], "has the highest number of cancelled flights, relative to their number of total flights."))
+```
+
+```{r}
+UniqueCarrierCount2 <- inner_join(ontime_db, carriers_db,by=c("UniqueCarrier"="Code")) %>% 
+group_by(Description) %>% summarize(denominator= count(Description)) %>% arrange(desc(denominator)) 
+UniqueCarrierCount2
+```
+
+```{r}
+q3_db <- tbl(conn,"q3")
+UniqueCarrierCount_db <- tbl(conn,"UniqueCarrierCount")
+```
+
+```{r}
+q4b <- mutate(inner_join(q3_db, UniqueCarrierCount_db, by = "carrier"), ratio = total*1./denominator) %>% arrange(desc(ratio)) 
+print(head(q4b, 1))
+```
+
+```{r}
+dbWriteTable(conn,"q4", q4)
+```
+
+```{r}
+#dbDisconnect(conn)
+```
